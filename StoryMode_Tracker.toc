@@ -1,0 +1,17 @@
+## Interface: 16001
+## Title: Story Mode - Tracker
+## Notes: A next-step tracker for Story Mode on WoW Forever: the story you're following, at the top of the quest tracker.|n|n/sm tracker hides or shows it.
+## Notes-esES: Un seguimiento del siguiente paso para Story Mode en WoW Forever: la historia que sigues, encima del seguimiento de misiones.|n|n/sm tracker lo oculta o lo muestra.
+## Notes-esMX: Un seguimiento del siguiente paso para Story Mode en WoW Forever: la historia que sigues, encima del seguimiento de misiones.|n|n/sm tracker lo oculta o lo muestra.
+## Dependencies: StoryMode
+## OptionalDeps: ParchmentUI
+## SavedVariables: StoryModeTrackerDB
+## Version: 1.0.0
+## Author: Gotxiko
+## IconTexture: Interface\AddOns\StoryMode\Art\Icons\storymode_icon
+
+Locales.lua
+Core.lua
+Hooks.lua
+TrackerStack.lua
+NextStepTracker.lua
