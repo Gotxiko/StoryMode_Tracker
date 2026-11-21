@@ -59,6 +59,9 @@ local TITLE_X = 34          -- the quest title, after its shield
 local LINE_X = 36           -- a line under it
 local SHIELD_SIZE = 28
 local BANG_RAISE = 2        -- the ! over the shield, up from its centre
+local LOCK_SIZE = 20        -- the padlock in place of the shield, while the chapter is locked
+local IN_PROGRESS_SIZE = 18 -- the in-progress icon over the shield
+local TAG_GAP = 2           -- between the quest title and its Dungeon / Raid tag under it
 local CHECK_SIZE = 14
 local GAP = 3               -- between two lines under a quest
 local TITLE_GAP = 4         -- under the quest title
@@ -66,7 +69,7 @@ local STEP_GAP = 6          -- under the step's text, before its objectives
 local QUEST_TOP = 8         -- between a chapter heading and its quest
 local ENTRY_GAP = 12        -- between one chapter's quest and the next heading
 local SUB_GAP = 8           -- between two quests of the same chapter
-local INSTANCE_ICON_SIZE = 14  -- the dungeon or raid icon before a quest's title
+local INSTANCE_ICON_SIZE = 14  -- the dungeon or raid icon in the tag under a quest's title
 local MAX_LIST_SHARE = 0.45   -- the chapters scroll past this share of the screen's height
 local SCROLL_STEP = 40         -- how far one turn of the mouse wheel moves them
 -- The chapter bar: Blizzard's widget status bar (Interface/Widgets/
@@ -95,7 +98,24 @@ local ATLAS = {
     glow = "UI-QuestPoiCampaign-InnerGlow",
     bang = "UI-QuestPoiCampaign-QuestBang",                     -- ! to pick up
     turnIn = "UI-QuestPoiCampaign-QuestBangTurnIn",             -- ? to hand in
+    -- Under way, not ready to hand in yet (Interface/QuestFrame/
+    -- QuestInProgressIcons2x): yellow on the plain shield, brown on the
+    -- yellow one of the quest in focus.
+    inProgress = "Quest-In-Progress-Icon-yellow",
+    inProgressFocus = "Quest-In-Progress-Icon-Brown",
+    -- In place of the shield while a requirement (a level, say) locks the
+    -- chapter: the artifact forge's padlock (Interface/Artifacts/ArtifactForge).
+    lock = "Forge-Lock",
 }
+
+-- A dungeon or raid step says so right under its title: the quest log's
+-- icon for it (Interface/QuestFrame/QuestLogQuestTypeIcons2x) and the
+-- client's own word for it.
+local INSTANCE_TAG = {
+    dungeon = { icon = "questlog-questtypeicon-dungeon", label = "LFG_TYPE_DUNGEON", fallback = "Dungeon" },
+    raid = { icon = "questlog-questtypeicon-raid", label = "LFG_TYPE_RAID", fallback = "Raid" },
+}
+local TAG_COLOR = { r = 0.7, g = 0.7, b = 0.7 }
 
 -- The quest tracker's colours, or the same values where the game has none.
 local TRACKER_COLOR = _G.OBJECTIVE_TRACKER_COLOR or {}
@@ -110,6 +130,60 @@ local COLOR = {
 
 local function HasAtlas(name)
     return name and C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(name) ~= nil
+end
+
+local function FirstAtlas(names)
+    for _, name in ipairs(names or {}) do
+        if HasAtlas(name) then return name end
+    end
+    return nil
+end
+
+-- Quests the game was asked to load, to learn whether they're dungeon or
+-- raid quests; the tracker redraws when one arrives.
+local loadingKind = {}
+local kindEvents
+
+-- "dungeon", "raid" or nil for a step. Story Mode's own answer (the game's
+-- quest tag, remembered per account, or the story data's instance field),
+-- as its quest cards and story list show it. A quest the game hasn't loaded
+-- yet (one not in the log) is loaded, and the tracker redraws then.
+local function InstanceKind(nextQuest)
+    if not nextQuest then return nil end
+    if SM.GetQuestInstanceType then
+        local kind, unknown = SM.GetQuestInstanceType(nextQuest)
+        if kind == "dungeon" or kind == "raid" then return kind end
+        if unknown and C_QuestLog and C_QuestLog.RequestLoadQuestByID then
+            if not kindEvents then
+                kindEvents = CreateFrame("Frame")
+                pcall(kindEvents.RegisterEvent, kindEvents, "QUEST_DATA_LOAD_RESULT")
+                kindEvents:SetScript("OnEvent", function(_, _, questID)
+                    if not loadingKind[questID] then return end
+                    loadingKind[questID] = nil
+                    if SM.RefreshNextStepTracker then SM.RefreshNextStepTracker() end
+                end)
+            end
+            for _, questID in ipairs(unknown) do
+                if loadingKind[questID] == nil then
+                    loadingKind[questID] = pcall(C_QuestLog.RequestLoadQuestByID, questID) or false
+                end
+            end
+        end
+        return nil
+    end
+    local _, icon = SM.GetInstanceQuestTag and SM.GetInstanceQuestTag(nextQuest)
+    return icon and (icon:find("raid") and "raid" or icon:find("dungeon") and "dungeon") or nil
+end
+
+-- A step's tag text ("|A:icon|a Dungeon"), or nil when it's no dungeon or raid.
+local function InstanceTagText(nextQuest)
+    local tag = INSTANCE_TAG[InstanceKind(nextQuest)]
+    if not tag then return nil end
+    local text = _G[tag.label] or tag.fallback
+    if HasAtlas(tag.icon) then
+        text = string.format("|A:%s:%d:%d|a %s", tag.icon, INSTANCE_ICON_SIZE, INSTANCE_ICON_SIZE, text)
+    end
+    return text
 end
 
 local function SetAtlasOr(texture, atlas, r, g, b, a)
@@ -288,16 +362,31 @@ local function IsFocused(nextQuest)
     return false
 end
 
+-- Greys the glyph or not.
+local function GreyGlyph(glyph, grey)
+    glyph:SetDesaturated(grey and true or false)
+    glyph:SetAlpha(grey and 0.75 or 1)
+end
+
 local function PaintQuest(entry)
     local quest = entry.quest
     -- The shield behind the glyph: the tracker's focused (yellow) shield for
     -- the quest the game is focused on; a glow over it while hovered.
+    -- A locked chapter shows the padlock alone (the glyph), no shield.
+    local padlock = entry.locked and HasAtlas(ATLAS.lock)
     local focused = not entry.locked and IsFocused(entry.nextQuest)
     local atlas = (focused and HasAtlas(ATLAS.shieldFocus)) and ATLAS.shieldFocus or ATLAS.shield
-    quest.shield:SetShown(HasAtlas(atlas))
+    quest.shield:SetShown(not padlock and HasAtlas(atlas))
     if HasAtlas(atlas) then quest.shield:SetAtlas(atlas) end
     quest.shield:SetDesaturated(entry.locked and true or false)
-    quest.glow:SetShown(entry.hovering and HasAtlas(ATLAS.glow))
+    quest.glow:SetShown(not padlock and entry.hovering and HasAtlas(ATLAS.glow))
+    -- The ?: grey on the yellow shield of the quest in focus, yellow on the
+    -- plain one, so it always stands out.
+    if entry.glyph == ATLAS.turnIn then GreyGlyph(quest.glyph, focused) end
+    -- The in-progress icon: brown on the yellow shield, yellow on the plain one.
+    if entry.glyph == ATLAS.inProgress then
+        quest.glyph:SetAtlas((focused and HasAtlas(ATLAS.inProgressFocus)) and ATLAS.inProgressFocus or ATLAS.inProgress)
+    end
     if entry.locked then
         SetColor(quest.title, COLOR.locked)
     else
@@ -583,7 +672,8 @@ local function NewEntry()
     quest:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     quest.shield = quest:CreateTexture(nil, "ARTWORK", nil, 1)
     quest.shield:SetSize(SHIELD_SIZE, SHIELD_SIZE)
-    quest.shield:SetPoint("TOPLEFT", quest, "TOPLEFT", 2, 3)
+    -- By its centre, so a dungeon or raid pin of another size sits in its place.
+    quest.shield:SetPoint("CENTER", quest, "TOPLEFT", 2 + SHIELD_SIZE / 2, 3 - SHIELD_SIZE / 2)
     quest.glyph = quest:CreateTexture(nil, "ARTWORK", nil, 2)
     quest.glyph:SetSize(SHIELD_SIZE, SHIELD_SIZE)
     quest.glyph:SetPoint("CENTER", quest.shield, "CENTER")
@@ -595,6 +685,11 @@ local function NewEntry()
     quest.glow:Hide()
     quest.title = NewText(quest, LINE_FONT)
     quest.title:SetPoint("TOPLEFT", quest, "TOPLEFT", TITLE_X, 0)
+    -- Dungeon / Raid, right under the title.
+    quest.tag = NewText(quest, STEP_FONT, false)
+    quest.tag:SetPoint("TOPLEFT", quest.title, "BOTTOMLEFT", 0, -TAG_GAP)
+    SetColor(quest.tag, TAG_COLOR)
+    quest.tag:Hide()
     quest:SetScript("OnEnter", function(self)
         entry.hovering = true
         PaintQuest(entry)
@@ -605,6 +700,9 @@ local function NewEntry()
         if not (data and nextQuest) then return end
         AnchorTooltip(self)
         GameTooltip:AddLine(nextQuest.name or "", 1, 0.82, 0)
+        -- Dungeon / Raid, as under the title on the tracker.
+        local tagText = InstanceTagText(nextQuest)
+        if tagText then GameTooltip:AddLine(tagText, TAG_COLOR.r, TAG_COLOR.g, TAG_COLOR.b) end
         if entry.locked then
             local reason = SM.GetQuestlineGateReason and SM.GetQuestlineGateReason(data, entry.chapter)
             if reason then GameTooltip:AddLine(reason, COLOR.locked.r, COLOR.locked.g, COLOR.locked.b, true) end
@@ -774,19 +872,26 @@ local function QuestLines(data, nextQuest, gateReason, explorer, chapter)
     return list, inLog, questID
 end
 
--- The glyph over the shield, and whether it's greyed: ! to pick up, ? to
--- hand in, a grey ? while the quest is under way, a grey ! while the
--- chapter is locked.
+-- The glyph over the shield, and whether it's greyed: ! to pick up, the
+-- in-progress icon while the quest is under way (a grey ? without it), ? to
+-- hand in, the padlock (or, without it, a grey !) while the chapter is
+-- locked. The ?'s and the in-progress icon's colours follow the focus
+-- (PaintQuest).
 local function QuestGlyph(gateReason, inLog, questID)
-    if gateReason then return ATLAS.bang, true end
+    if gateReason then
+        if HasAtlas(ATLAS.lock) then return ATLAS.lock, false end
+        return ATLAS.bang, true
+    end
     if inLog then
         if questID and C_QuestLog and C_QuestLog.IsComplete and C_QuestLog.IsComplete(questID) then
             return ATLAS.turnIn, false
         end
+        if HasAtlas(ATLAS.inProgress) then return ATLAS.inProgress, false end
         return ATLAS.turnIn, true
     end
     return ATLAS.bang, false
 end
+
 
 -- Lays out one chapter under anchor (the frame above it); returns its
 -- bottom-most frame and its height.
@@ -856,23 +961,32 @@ local function LayoutEntry(entry, data, item, anchor, width, explorer)
 
     local list, inLog, questID = QuestLines(data, nextQuest, gateReason, explorer, chapter)
     local glyph, grey = QuestGlyph(gateReason, inLog, questID)
+    entry.glyph = glyph
     quest.glyph:SetShown(HasAtlas(glyph))
     if HasAtlas(glyph) then quest.glyph:SetAtlas(glyph) end
+    if glyph == ATLAS.lock then
+        quest.glyph:SetSize(LOCK_SIZE, LOCK_SIZE)
+    elseif glyph == ATLAS.inProgress then
+        quest.glyph:SetSize(IN_PROGRESS_SIZE, IN_PROGRESS_SIZE)
+    else
+        quest.glyph:SetSize(SHIELD_SIZE, SHIELD_SIZE)
+    end
     -- The ! art sits low on the shield; lift it to look centred.
     quest.glyph:ClearAllPoints()
     quest.glyph:SetPoint("CENTER", quest.shield, "CENTER", 0, glyph == ATLAS.bang and BANG_RAISE or 0)
-    quest.glyph:SetDesaturated(grey)
-    quest.glyph:SetAlpha(grey and 0.75 or 1)
+    GreyGlyph(quest.glyph, grey)
 
     quest.title:SetWidth(width - TITLE_X - 6)
-    -- A dungeon or raid step starts with the quest log's icon for it.
-    local _, instanceIcon = SM.GetInstanceQuestTag and SM.GetInstanceQuestTag(nextQuest)
-    local titleText = nextQuest.name or ""
-    if instanceIcon and HasAtlas(instanceIcon) then
-        titleText = string.format("|A:%s:%d:%d|a %s", instanceIcon, INSTANCE_ICON_SIZE, INSTANCE_ICON_SIZE, titleText)
+    quest.title:SetText(nextQuest.name or "")
+    local y = quest.title:GetStringHeight()
+    -- A dungeon or raid step's tag under the title.
+    local tagText = InstanceTagText(nextQuest)
+    quest.tag:SetShown(tagText ~= nil)
+    if tagText then
+        quest.tag:SetText(tagText)
+        y = y + TAG_GAP + quest.tag:GetStringHeight()
     end
-    quest.title:SetText(titleText)
-    local y = quest.title:GetStringHeight() + TITLE_GAP
+    y = y + TITLE_GAP
 
     for i = 1, math.max(MAX_LINES, #entry.lines) do
         local line_ = list[i]
@@ -928,6 +1042,7 @@ local function LayoutEntry(entry, data, item, anchor, width, explorer)
 end
 
 local function Hide()
+    if SM.SetStoryTrackerShown then SM.SetStoryTrackerShown(false) end
     if not B then return end
     if stack and slot then stack.Set(slot, false) else B:Hide() end
 end
@@ -1003,6 +1118,8 @@ function Refresh()
     B:SetHeight(height)
     -- The stack makes room for the block and a little more under it.
     if stack and slot then stack.Set(slot, true, height + BOTTOM_PAD) else B:Show() end
+    -- Journey mode hides the quest tracker while a story shows here.
+    if SM.SetStoryTrackerShown then SM.SetStoryTrackerShown(true) end
 end
 
 function SM.RefreshNextStepTracker()

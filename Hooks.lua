@@ -21,6 +21,7 @@ local L = T.L
 -- ── Following the story the player continues ─────────────────────────────
 -- Begin/Continue Story, a quest card's Track and /sm track all come through
 -- SM.SetWaypointForQuest.
+-- (The tracker's quiet waypoint calls it too, as T.OnStoryContinued.)
 local function OnStoryContinued(data, quest)
     if not (data and data.id) then return end
     T.SetFollowedStoryID(data.id)
@@ -33,6 +34,8 @@ local function OnStoryContinued(data, quest)
     if SM.RefreshStoryListState then SM.RefreshStoryListState() end
     T.RefreshTrackNodeBadges()
 end
+
+T.OnStoryContinued = OnStoryContinued
 
 local SetWaypointForQuest = SM.SetWaypointForQuest
 if SetWaypointForQuest then
@@ -168,13 +171,15 @@ local function DecorateRow(row)
     end
 
     -- Shift-left-click links the story while typing in chat (Story Mode's
-    -- own); otherwise it follows or stops following the story.
+    -- own); otherwise it follows or stops following the story, even one
+    -- still locked (a level to reach, say): the tracker lists its chapters
+    -- with what they wait on right under them.
     local click = card:GetScript("OnClick")
     if click and click ~= card.smtClick then
         card.smtClick = function(self, button, ...)
             if button == "LeftButton" and IsShiftKeyDown() then
                 local typing = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
-                if not typing and not self.lockReason and T.ToggleTrackedStory then
+                if not typing and T.ToggleTrackedStory then
                     T.ToggleTrackedStory(self.smtData)
                     T.RefreshTrackNodeBadges()
                     ReshowTooltip(self)
@@ -186,18 +191,26 @@ local function DecorateRow(row)
         card:SetScript("OnClick", card.smtClick)
     end
 
-    -- Story Mode shows a tooltip only on a locked card; an open one says
-    -- what shift-click does.
+    -- What shift-click does: under the lock on a locked card's tooltip
+    -- (Story Mode's own), else in a tooltip of its own.
     if not card.smtEnterHooked then
         card.smtEnterHooked = true
         card:HookScript("OnEnter", function(self)
-            if self.lockReason or not self.smtData then return end
+            if not self.smtData then return end
             local tip = Tooltip()
             local tracked = T.IsStoryTracked and T.IsStoryTracked(self.smtData)
+            local hint = T.FormatHotkeys(tracked and L["Story Card Untrack"] or L["Story Card Track"])
+            if self.lockReason then
+                if not (tip:IsShown() and tip:GetOwner() == self) then return end
+                tip:AddLine(" ")
+                tip:AddLine(hint, 1, 0.82, 0, true)
+                tip:Show()
+                return
+            end
             tip:SetOwner(self, "ANCHOR_RIGHT")
             tip:ClearLines()
             tip:AddLine(self.smtData.title, 1, 1, 1)
-            tip:AddLine(T.FormatHotkeys(tracked and L["Story Card Untrack"] or L["Story Card Track"]), 1, 0.82, 0)
+            tip:AddLine(hint, 1, 0.82, 0)
             tip:Show()
         end)
         card:HookScript("OnLeave", function() Tooltip():Hide() end)

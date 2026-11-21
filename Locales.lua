@@ -30,6 +30,8 @@ strings.enUS = {
     ["Explorer Hint Explore"] = "Explore to find where the story goes next.",
     ["Tracker Hidden"] = "Next-step tracker hidden. Type /sm tracker to show it again.",
     ["Tracker Shown"] = "Next-step tracker shown.",
+    ["Journey Mode"] = "Journey Mode",
+    ["Journey Mode Text"] = "While you're tracking a story, the standard quest tracker is hidden and only the story's next steps show on screen. Stop tracking the story, or turn this off, and the quest tracker comes back.|n|nIn combat the change waits until the fight is over.",
 }
 
 strings.esES = {
@@ -57,6 +59,8 @@ strings.esES = {
     ["Explorer Hint Explore"] = "Explora para descubrir cómo sigue la historia.",
     ["Tracker Hidden"] = "Seguimiento del siguiente paso oculto. Escribe /sm tracker para volver a mostrarlo.",
     ["Tracker Shown"] = "Seguimiento del siguiente paso visible.",
+    ["Journey Mode"] = "Modo Travesía",
+    ["Journey Mode Text"] = "Mientras sigues una historia, el seguimiento de misiones habitual se oculta y en pantalla solo quedan los siguientes pasos de la historia. Deja de seguir la historia, o desactiva esta opción, y el seguimiento de misiones vuelve.|n|nEn combate, el cambio espera a que termine la pelea.",
 }
 strings.esMX = strings.esES
 

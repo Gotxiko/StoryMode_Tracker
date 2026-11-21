@@ -8,6 +8,9 @@ local addonName, T = ...
 -- Story Mode's functions as SM.* and its own as SM.* too. What this addon
 -- defines stays in T and never lands in Story Mode's table, except the few
 -- functions Hooks.lua wraps on purpose.
+-- Story Mode's data and answers come first (what a quest is, whether a
+-- chapter is locked or reached, ...); this addon asks the game itself only
+-- where Story Mode has no answer.
 -- =============================================================================
 
 local SM = _G.StoryMode
@@ -187,7 +190,11 @@ function T.GetQuestCardText(questID)
     return text
 end
 
--- The game's tag for a dungeon or raid quest and the quest log's icon for it.
+-- A dungeon or raid quest's label ("Dungeon", "Raid", in the player's
+-- language) and the quest log's icon for it, or nil. Story Mode says which
+-- it is (SM.GetQuestInstanceType: the game's quest tag, remembered per
+-- account, or the story data); the game's tag is read here only where Story
+-- Mode has no answer.
 local DUNGEON_ICON, RAID_ICON = "questlog-questtypeicon-dungeon", "questlog-questtypeicon-raid"
 local INSTANCE_QUEST_TAGS = { [81] = DUNGEON_ICON, [62] = RAID_ICON, [88] = RAID_ICON, [89] = RAID_ICON }
 local DATA_INSTANCE_TAGS = {
@@ -196,6 +203,12 @@ local DATA_INSTANCE_TAGS = {
 }
 function T.GetInstanceQuestTag(quest)
     if not quest then return nil end
+    if SM.GetQuestInstanceType then
+        local kind = SM.GetQuestInstanceType(quest)
+        local tag = DATA_INSTANCE_TAGS[kind]
+        if tag then return _G[tag.label] or tag.fallback, tag.icon end
+        if kind == "none" then return nil end
+    end
     if C_QuestLog and C_QuestLog.GetQuestTagInfo then
         for _, questID in ipairs(SM.GetQuestIDs(quest)) do
             local info = C_QuestLog.GetQuestTagInfo(questID)
@@ -398,26 +411,158 @@ function T.FindChapterNextQuest(data, ch, strict)
 end
 
 -- ── Showing the way without opening anything ─────────────────────────────
--- Story Mode's Track Quest sets the waypoint and focus, then opens the quest
--- log and the map. Clicked from the tracker while playing, only the first
--- part is wanted: the quest log stays shut and the map is put back as it was.
-function T.SetWaypointQuiet(data, quest)
-    local map = _G.WorldMapFrame
-    local mapWasShown = map and map:IsShown()
-    local previousMapID = mapWasShown and map.GetMapID and map:GetMapID()
-    local openQuestLog = SM.OpenQuestLogToQuest
-    SM.OpenQuestLogToQuest = function() return false end
-    local ok, result = pcall(SM.SetWaypointForQuest, data, quest)
-    SM.OpenQuestLogToQuest = openQuestLog
-    if map then
-        if not mapWasShown and map:IsShown() then
-            if HideUIPanel then HideUIPanel(map) else map:Hide() end
-        elseif mapWasShown and previousMapID and map.SetMapID and map:GetMapID() ~= previousMapID then
-            map:SetMapID(previousMapID)
+-- Story Mode's Track Quest (SM.SetWaypointForQuest) sets the waypoint and
+-- focus, then opens the quest log and the world map to ping the spot.
+-- Clicked from the tracker while playing, only the first part is wanted, and
+-- opening the map only to close it again makes the game hitch. So this does
+-- what Story Mode does there, step for step, but never touches the map or
+-- the quest log. Story Mode's data says where a quest is; the game is asked
+-- only to place it exactly.
+
+-- Whether Story Mode may mark the map (WoW Forever: only while the world
+-- map's Quest Objectives filter is on), as in Story Mode.
+local function MapPinsWanted()
+    if not (SM.Client and SM.Client.isForever) then return true end
+    local value = GetCVar and GetCVar("questPOI")
+    return value == nil or value == "1"
+end
+
+-- Trivial quest tracking on, as Story Mode turns it on, so low quests show.
+local function EnsureTrivialQuestsVisible()
+    if not (SM.GetNumTrackingTypes and SM.GetTrackingInfo and SM.SetTracking) then return end
+    for i = 1, SM.GetNumTrackingTypes() do
+        local info = SM.GetTrackingInfo(i)
+        if info and not info.active then
+            local isTrivial = (MINIMAP_TRACKING_TRIVIAL_QUESTS and info.name == MINIMAP_TRACKING_TRIVIAL_QUESTS)
+                or info.name == "Trivial Quests" or info.name == "Low Level Quests"
+            if isTrivial then
+                local idx, name = i, info.name
+                C_Timer.After(0, function()
+                    SM.SetTracking(idx, true)
+                    local format = SM.L and SM.L["Tracking Enabled Trivial Format"]
+                    if format then print(L["Addon Prefix"] .. string.format(format, name)) end
+                end)
+                return
+            end
         end
     end
-    if not ok then error(result, 0) end
-    return result
+end
+
+local function TrackedQuestID(quest)
+    local _, activeID = SM.IsQuestEntryInLog(quest)
+    return activeID or quest.id
+end
+
+-- Where the game puts the quest's icon (a quest in the log, or one offered
+-- on the map at hand), or nil.
+local function LiveQuestLocation(qid, mapHint)
+    if not (qid and C_QuestLog) then return nil end
+    if C_QuestLog.GetQuestUiMapID and C_QuestLog.GetNextWaypointForMap then
+        local mapID = C_QuestLog.GetQuestUiMapID(qid)
+        if mapID and mapID > 0 then
+            local x, y = C_QuestLog.GetNextWaypointForMap(qid, mapID)
+            if x and y then return { mapID = mapID, x = x, y = y } end
+        end
+    end
+    if mapHint and C_QuestLog.GetQuestsOnMap then
+        for _, q in ipairs(C_QuestLog.GetQuestsOnMap(mapHint) or {}) do
+            if q.questID == qid and q.x and q.y then return { mapID = mapHint, x = q.x, y = q.y } end
+        end
+    end
+    return nil
+end
+
+-- Where a quest is, as Story Mode finds it: the game's exact spot when it
+-- knows one on the map the story data points to, else the story data's
+-- (the quest's own spot, its giver's, the story's start).
+local function QuestLocation(data, quest)
+    local questLocation = quest.mapID and quest.x and quest.y
+        and SM.GetClientLocation({ mapID = quest.mapID, x = quest.x, y = quest.y }) or nil
+    local npcLocation = data.npcLocations and SM.GetClientLocation(data.npcLocations[quest.npc]) or nil
+    local mapHint = (questLocation and questLocation.mapID) or (npcLocation and npcLocation.mapID)
+        or SM.GetClientMapID(data.startMapID)
+    local live = LiveQuestLocation(TrackedQuestID(quest), mapHint)
+    if live then return live end
+    if questLocation then return questLocation end
+    if npcLocation then return npcLocation end
+    if data.startQuest and quest.id == data.startQuest.id and data.startMapID and data.startX and data.startY then
+        return SM.GetClientLocation({ mapID = data.startMapID, x = data.startX, y = data.startY })
+    end
+    return nil
+end
+
+-- A quest the story sends the player to first (guidanceQuest/s), while it's
+-- still to do.
+local function GuidanceOverride(quest)
+    if SM.IsQuestEntryInLog(quest) then return nil end
+    if quest.id and SM.IsQuestComplete(quest.id) then return nil end
+    local function Pending(g)
+        return type(g) == "table" and not (g.id and SM.IsQuestComplete(g.id))
+    end
+    for _, g in ipairs(type(quest.guidanceQuests) == "table" and quest.guidanceQuests or {}) do
+        if Pending(g) then return g end
+    end
+    if Pending(quest.guidanceQuest) then return quest.guidanceQuest end
+    return nil
+end
+
+local function TrackResult(kind, questID, loc, questOverride)
+    return { kind = kind, questID = questID, mapID = loc and loc.mapID or nil, location = loc,
+        openedQuestLog = false, quest = questOverride }
+end
+
+local WAYPOINT_SOUND = SOUNDKIT and SOUNDKIT.UI_MAP_WAYPOINT_SUPER_TRACK_ON or 167425
+
+-- Sets the waypoint and focus for a quest, as Track Quest does, without
+-- opening anything. Returns what SM.PrintTrackResult reports.
+function T.SetWaypointQuiet(data, quest)
+    if not (data and quest) then return TrackResult("no_location") end
+    -- The tracker follows the story, as when it's continued in the window.
+    if T.OnStoryContinued then T.OnStoryContinued(data, quest) end
+
+    if SM.IsClassicClient and SM.IsClassicClient() then
+        local inLog, activeID = SM.IsQuestEntryInLog(quest)
+        if inLog then return TrackResult("classic_in_log", activeID) end
+        local guidance = GuidanceOverride(quest)
+        if guidance then return TrackResult("classic_guidance", nil, QuestLocation(data, guidance), guidance) end
+        return TrackResult("classic_guidance", TrackedQuestID(quest))
+    end
+
+    local pinsWanted = MapPinsWanted()
+    if pinsWanted then EnsureTrivialQuestsVisible() end
+
+    if SM.IsQuestEntryInLog(quest) then
+        local qid = TrackedQuestID(quest)
+        if SM.AddQuestWatch then SM.AddQuestWatch(qid) end
+        if pinsWanted and C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
+            C_SuperTrack.SetSuperTrackedQuestID(qid)
+        end
+        PlaySound(WAYPOINT_SOUND)
+        return TrackResult(pinsWanted and "supertracked" or "classic_in_log", qid, QuestLocation(data, quest))
+    end
+
+    local guidance = GuidanceOverride(quest)
+    local target = guidance or quest
+    local loc = QuestLocation(data, target)
+    local qid = TrackedQuestID(target)
+    if pinsWanted and qid and C_SuperTrack and C_SuperTrack.SetSuperTrackedMapPin
+        and Enum and Enum.SuperTrackingMapPinType and Enum.SuperTrackingMapPinType.QuestOffer then
+        C_SuperTrack.SetSuperTrackedMapPin(Enum.SuperTrackingMapPinType.QuestOffer, qid)
+    end
+    if pinsWanted and loc and C_Map and C_Map.CanSetUserWaypointOnMap and C_Map.CanSetUserWaypointOnMap(loc.mapID)
+        and UiMapPoint and C_Map.SetUserWaypoint then
+        C_Map.SetUserWaypoint(UiMapPoint.CreateFromCoordinates(loc.mapID, loc.x, loc.y))
+        if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+            C_SuperTrack.SetSuperTrackedUserWaypoint(true)
+        end
+        PlaySound(WAYPOINT_SOUND)
+        return TrackResult("waypoint", qid, loc, guidance)
+    end
+    if loc then
+        PlaySound(WAYPOINT_SOUND)
+        return TrackResult("waypoint_approx", qid, loc, guidance)
+    end
+    return TrackResult("no_location", qid, nil, guidance)
 end
 
 -- ── Loading ──────────────────────────────────────────────────────────────
