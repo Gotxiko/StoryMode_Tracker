@@ -65,8 +65,21 @@ local function ApplyOffset(offset)
     if pushed.offset == offset then return true end
     if not CanMove(f) then pendingMove = true return false end
     applying = true
+    -- The tracker is clamped to the screen (Edit Mode's, FlareUI's holder).
+    -- When the blocks push its bottom off the screen, the clamp shoves the
+    -- whole tracker back up, GetTop() reads the clamped spot, and Layout puts
+    -- the blocks that much higher (under the minimap). So the clamp is off
+    -- while we push, and back as it was once we let go.
+    if offset ~= 0 and pushed.clamped == nil then
+        pushed.clamped = f:IsClampedToScreen() and true or false
+        if pushed.clamped then f:SetClampedToScreen(false) end
+    end
     ClearPoints(f)
     for _, p in ipairs(pushed.points) do SetPointRaw(f, p[1], p[2], p[3], p[4], p[5] - offset) end
+    if offset == 0 and pushed.clamped ~= nil then
+        if pushed.clamped then f:SetClampedToScreen(true) end
+        pushed.clamped = nil
+    end
     applying = false
     pushed.offset = offset
     return true

@@ -511,10 +511,9 @@ local function TrackResult(kind, questID, loc, questOverride)
         openedQuestLog = false, quest = questOverride }
 end
 
-local WAYPOINT_SOUND = SOUNDKIT and SOUNDKIT.UI_MAP_WAYPOINT_SUPER_TRACK_ON or 167425
 
 -- Sets the waypoint and focus for a quest, as Track Quest does, without
--- opening anything. Returns what SM.PrintTrackResult reports.
+-- opening anything. Returns what was done, as Track Quest does.
 function T.SetWaypointQuiet(data, quest)
     if not (data and quest) then return TrackResult("no_location") end
     -- The tracker follows the story, as when it's continued in the window.
@@ -537,7 +536,6 @@ function T.SetWaypointQuiet(data, quest)
         if pinsWanted and C_SuperTrack and C_SuperTrack.SetSuperTrackedQuestID then
             C_SuperTrack.SetSuperTrackedQuestID(qid)
         end
-        PlaySound(WAYPOINT_SOUND)
         return TrackResult(pinsWanted and "supertracked" or "classic_in_log", qid, QuestLocation(data, quest))
     end
 
@@ -555,14 +553,29 @@ function T.SetWaypointQuiet(data, quest)
         if C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
             C_SuperTrack.SetSuperTrackedUserWaypoint(true)
         end
-        PlaySound(WAYPOINT_SOUND)
         return TrackResult("waypoint", qid, loc, guidance)
     end
     if loc then
-        PlaySound(WAYPOINT_SOUND)
         return TrackResult("waypoint_approx", qid, loc, guidance)
     end
     return TrackResult("no_location", qid, nil, guidance)
+end
+
+-- Stops showing the way to a quest: the game no longer focuses on it (the
+-- quest, its quest-offer pin, or the waypoint set for it). The quest stays
+-- watched, and in the next-step tracker.
+function T.ClearWaypointQuiet()
+    if not C_SuperTrack then return end
+    if C_SuperTrack.IsSuperTrackingUserWaypoint and C_SuperTrack.IsSuperTrackingUserWaypoint()
+        and C_Map and C_Map.ClearUserWaypoint then
+        C_Map.ClearUserWaypoint()
+    end
+    if C_SuperTrack.ClearAllSuperTracked then
+        C_SuperTrack.ClearAllSuperTracked()
+    else
+        if C_SuperTrack.ClearSuperTrackedMapPin then C_SuperTrack.ClearSuperTrackedMapPin() end
+        if C_SuperTrack.SetSuperTrackedQuestID then C_SuperTrack.SetSuperTrackedQuestID(0) end
+    end
 end
 
 -- ── Loading ──────────────────────────────────────────────────────────────

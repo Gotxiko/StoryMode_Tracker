@@ -41,8 +41,7 @@ local ORDER = 30            -- in the stack: ParchmentUI's dungeon tracker is 10
 local MIN_W, MAX_W, DEFAULT_W = 210, 320, 248
 local PLATE_RATIO = 80 / 253
 local PLATE_TEXT_BOTTOM = 0.2   -- the plate's text stands this far up it, as a share of its height
-local PLATE_CLOSE_Y = -3        -- the X, from the plate's middle, level with the text
-local PLATE_TEXT_RIGHT = 66     -- the plate's text stops short of the journal button and the X
+local PLATE_TEXT_RIGHT = 22     -- the plate's text, in from its right edge as from its left
 -- The chapter heading, as FlareUI draws its tracker's zone headings: the
 -- tracker's secondary header strip cut in three (both ends at their own
 -- width, a thin slice of the plain middle stretched between them), centred
@@ -84,8 +83,6 @@ local MAX_LINES = 6
 -- Atlases (Retail's names; each one is checked, with a plain fallback).
 local ATLAS = {
     plate = "lorewalking-scenario-frame",                       -- Interface/Scenarios/ScenarioLorewalking
-    close = "RedButton-Exit",                                   -- Interface/Buttons/RedButton2x
-    closePressed = "RedButton-exit-pressed",
     section = "UI-QuestTracker-Secondary-Objective-Header",     -- Interface/QuestFrame/QuestTracker2x
     collapse = "UI-QuestTrackerButton-Secondary-Collapse",
     expand = "UI-QuestTrackerButton-Secondary-Expand",
@@ -331,17 +328,16 @@ end
 
 -- The tracker sits at the top right of the screen, so its tooltips open to
 -- the left of what's hovered and grow down from its top edge.
+-- The click and shift-click lines, while the player wants them (Show help
+-- in tooltips, in the Story Mode window).
+local function ShowsHelp()
+    return not SM.ShowsTooltipHelp or SM.ShowsTooltipHelp()
+end
+
 local function AnchorTooltip(owner)
     GameTooltip:SetOwner(owner, "ANCHOR_NONE")
     GameTooltip:ClearAllPoints()
     GameTooltip:SetPoint("TOPRIGHT", owner, "TOPLEFT", -4, 0)
-end
-
--- The plate's buttons say what they do in one gold line.
-local function ShowTooltip(owner, key)
-    AnchorTooltip(owner)
-    GameTooltip:AddLine(L[key], 1, 0.82, 0)
-    GameTooltip:Show()
 end
 
 -- Hovering a quest brightens it, as the quest tracker's blocks do.
@@ -380,9 +376,6 @@ local function PaintQuest(entry)
     if HasAtlas(atlas) then quest.shield:SetAtlas(atlas) end
     quest.shield:SetDesaturated(entry.locked and true or false)
     quest.glow:SetShown(not padlock and entry.hovering and HasAtlas(ATLAS.glow))
-    -- The ?: grey on the yellow shield of the quest in focus, yellow on the
-    -- plain one, so it always stands out.
-    if entry.glyph == ATLAS.turnIn then GreyGlyph(quest.glyph, focused) end
     -- The in-progress icon: brown on the yellow shield, yellow on the plain one.
     if entry.glyph == ATLAS.inProgress then
         quest.glyph:SetAtlas((focused and HasAtlas(ATLAS.inProgressFocus)) and ATLAS.inProgressFocus or ATLAS.inProgress)
@@ -430,8 +423,26 @@ local function CreateBlock()
     SetAtlasOr(plate.bg, ATLAS.plate)
     plate.text = NewText(plate, PLATE_FONT)
     plate.text:SetMaxLines(2)
-    plate:RegisterForClicks("LeftButtonUp")
-    plate:SetScript("OnClick", function() OpenStory(B.data, nil) end)
+    -- Left-click opens the story, right-click its journal (diario),
+    -- shift-left-click stops following it.
+    plate:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    plate:SetScript("OnClick", function(_, button)
+        local data = B.data
+        if not data then return end
+        if button == "RightButton" then
+            if SM.OpenStoryModeToSelection then
+                SM.OpenStoryModeToSelection(data.id, StoryModeDB and StoryModeDB.selectedChapter or 1, "journal")
+            end
+        elseif IsShiftKeyDown() then
+            GameTooltip:Hide()
+            if SM.SetFollowedStoryID then SM.SetFollowedStoryID(nil) end
+            Refresh()
+            if SM.RefreshStoryListState then SM.RefreshStoryListState() end
+            if SM.RefreshTrackNodeBadges then SM.RefreshTrackNodeBadges() end
+        else
+            OpenStory(data, nil)
+        end
+    end)
     -- The story's title and description, as its card in the Story Mode
     -- window shows them, then what a click does.
     plate:SetScript("OnEnter", function(self)
@@ -443,95 +454,15 @@ local function CreateBlock()
         if description and description ~= "" then
             GameTooltip:AddLine(description, 1, 1, 1, true)
         end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Plate"]), 0.7, 0.7, 0.7)
+        if ShowsHelp() then
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Plate"]), 0.7, 0.7, 0.7)
+            GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Plate Untrack"]), 0.7, 0.7, 0.7)
+            GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Plate Journal"]), 0.7, 0.7, 0.7)
+        end
         GameTooltip:Show()
     end)
     plate:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-    plate.close = CreateFrame("Button", nil, plate)
-    plate.close:SetSize(24, 24)
-    local closeTex = plate.close:CreateTexture(nil, "ARTWORK")
-    closeTex:SetAllPoints()
-    if HasAtlas(ATLAS.close) then
-        closeTex:SetAtlas(ATLAS.close)
-        plate.close:SetNormalTexture(closeTex)
-        if HasAtlas(ATLAS.closePressed) and plate.close.SetPushedAtlas then
-            plate.close:SetPushedAtlas(ATLAS.closePressed)
-        end
-    else
-        closeTex:SetTexture("Interface\\Buttons\\UI-StopButton")
-    end
-    plate.close:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    plate.close:SetScript("OnClick", function()
-        if SM.SetFollowedStoryID then SM.SetFollowedStoryID(nil) end
-        print(L["Addon Prefix"] .. L["Tracker Unfollowed"])
-        Refresh()
-        if SM.RefreshStoryListState then SM.RefreshStoryListState() end
-        if SM.RefreshTrackNodeBadges then SM.RefreshTrackNodeBadges() end
-    end)
-    plate.close:SetScript("OnEnter", function(self) ShowTooltip(self, "Tracker Tooltip Close") end)
-    plate.close:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-    -- Beside the X: the story's journal (diario), with the Journal tab's icon.
-    -- Framed as the quest tracker frames a quest's item button, glowing
-    -- while hovered, the icon pressed in a pixel while clicked.
-    local journal = CreateFrame("Button", nil, plate)
-    plate.journal = journal
-    journal:SetSize(20, 20)
-    journal:SetPoint("RIGHT", plate.close, "LEFT", -6, 0)
-    local journalIcon = journal:CreateTexture(nil, "ARTWORK")
-    journalIcon:SetAllPoints()
-    journalIcon:SetTexture("Interface/ICONS/INV_SideTab_Stats_c60")
-    journalIcon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
-    local framed = HasAtlas("UI-QuestTrackerButton-QuestItem-Frame")
-    if framed then
-        local frame = journal:CreateTexture(nil, "OVERLAY")
-        frame:SetAtlas("UI-QuestTrackerButton-QuestItem-Frame")
-        frame:SetSize(30, 30)
-        frame:SetPoint("CENTER")
-        if HasAtlas("UI-QuestTrackerButton-QuestItem-Frame-Glow") then
-            -- A soft glow behind the icon and frame while hovered, not over them.
-            local glow = journal:CreateTexture(nil, "BACKGROUND")
-            glow:SetAtlas("UI-QuestTrackerButton-QuestItem-Frame-Glow")
-            glow:SetSize(30, 30)
-            glow:SetPoint("CENTER")
-            glow:SetAlpha(0.4)
-            glow:Hide()
-            journal.glow = glow
-        else
-            journal:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-        end
-    else
-        local edge = journal:CreateTexture(nil, "BACKGROUND")
-        edge:SetPoint("TOPLEFT", -1, 1)
-        edge:SetPoint("BOTTOMRIGHT", 1, -1)
-        edge:SetColorTexture(0, 0, 0, 0.8)
-        journal:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
-    end
-    journal:SetScript("OnMouseDown", function()
-        journalIcon:ClearAllPoints()
-        journalIcon:SetPoint("TOPLEFT", 1, -1)
-        journalIcon:SetPoint("BOTTOMRIGHT", 1, -1)
-    end)
-    journal:SetScript("OnMouseUp", function()
-        journalIcon:ClearAllPoints()
-        journalIcon:SetAllPoints()
-    end)
-    plate.journal:SetScript("OnClick", function()
-        local data = B.data
-        if data and SM.OpenStoryModeToSelection then
-            SM.OpenStoryModeToSelection(data.id, StoryModeDB and StoryModeDB.selectedChapter or 1, "journal")
-        end
-    end)
-    plate.journal:SetScript("OnEnter", function(self)
-        if self.glow then self.glow:Show() end
-        ShowTooltip(self, "Tracker Tooltip Journal")
-    end)
-    plate.journal:SetScript("OnLeave", function(self)
-        if self.glow then self.glow:Hide() end
-        GameTooltip:Hide()
-    end)
 
     -- The chapters scroll under the plate, which stays put: past a share of
     -- the screen's height, the mouse wheel moves them.
@@ -549,6 +480,8 @@ local function CreateBlock()
         local maxScroll = math.max(0, (content:GetHeight() or 0) - self:GetHeight())
         local target = self:GetVerticalScroll() - delta * SCROLL_STEP
         self:SetVerticalScroll(math.min(maxScroll, math.max(0, target)))
+        -- Quest item buttons follow their quests (QuestItems.lua).
+        if SM.RelayoutQuestItems then SM.RelayoutQuestItems() end
     end)
 
     stack = SM.GetTrackerStack and SM.GetTrackerStack()
@@ -661,8 +594,10 @@ local function NewEntry()
         if summary and summary ~= "" and (not explorer or WithStory(data, SM.IsChapterReached, data, ch)) then
             GameTooltip:AddLine(summary, 1, 1, 1, true)
         end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Heading"]), 0.7, 0.7, 0.7, true)
+        if ShowsHelp() then
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Heading"]), 0.7, 0.7, 0.7, true)
+        end
         GameTooltip:Show()
     end)
     section:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -751,9 +686,16 @@ local function NewEntry()
                 end
             end
         end
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Left Click"]), 0.7, 0.7, 0.7)
-        GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Right Click"]), 0.7, 0.7, 0.7)
+        if ShowsHelp() then
+            GameTooltip:AddLine(" ")
+            local focusedNow = not entry.locked and IsFocused(nextQuest)
+            GameTooltip:AddLine(SM.FormatHotkeys(focusedNow and L["Tracker Tooltip Left Click Stop"] or L["Tracker Tooltip Left Click"]), 0.7, 0.7, 0.7)
+            -- Shift-left-click opens the quest log on a quest that's in it.
+            if not entry.locked and SM.IsQuestEntryInLog(nextQuest) then
+                GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Shift Click Log"]), 0.7, 0.7, 0.7)
+            end
+            GameTooltip:AddLine(SM.FormatHotkeys(L["Tracker Tooltip Right Click"]), 0.7, 0.7, 0.7)
+        end
         GameTooltip:Show()
     end)
     quest:SetScript("OnLeave", function()
@@ -765,13 +707,20 @@ local function NewEntry()
         if not entry.data then return end
         if button == "RightButton" then
             OpenStory(entry.data, entry.chapter)
+        elseif button == "LeftButton" and IsShiftKeyDown() then
+            -- The quest log, open on the quest, while it's in the log.
+            local inLog, questID = false, nil
+            if entry.nextQuest then inLog, questID = SM.IsQuestEntryInLog(entry.nextQuest) end
+            if inLog and questID and SM.OpenQuestLogToQuest then SM.OpenQuestLogToQuest(questID) end
+        elseif entry.nextQuest and not entry.locked and IsFocused(entry.nextQuest) and SM.ClearWaypointQuiet then
+            -- Already the quest in focus: stop showing the way. It stays here.
+            SM.ClearWaypointQuiet()
+            PaintQuest(entry)
         elseif entry.nextQuest and not entry.locked and SM.SetWaypointQuiet then
             -- Sets the waypoint and focuses the quest without opening the
             -- map or the quest log (Continue Story in the window does).
-            local ok, err = pcall(function()
-                local result = SM.SetWaypointQuiet(entry.data, entry.nextQuest)
-                if SM.PrintTrackResult then SM.PrintTrackResult(result, entry.nextQuest, entry.data) end
-            end)
+            -- (No chat line: the shield and the waypoint say it.)
+            local ok, err = pcall(SM.SetWaypointQuiet, entry.data, entry.nextQuest)
             if not ok then
                 print(L["Addon Prefix"] .. tostring(err))
                 geterrorhandler()(err)
@@ -875,8 +824,7 @@ end
 -- The glyph over the shield, and whether it's greyed: ! to pick up, the
 -- in-progress icon while the quest is under way (a grey ? without it), ? to
 -- hand in, the padlock (or, without it, a grey !) while the chapter is
--- locked. The ?'s and the in-progress icon's colours follow the focus
--- (PaintQuest).
+-- locked. The in-progress icon's colour follows the focus (PaintQuest).
 local function QuestGlyph(gateReason, inLog, questID)
     if gateReason then
         if HasAtlas(ATLAS.lock) then return ATLAS.lock, false end
@@ -1043,6 +991,7 @@ end
 
 local function Hide()
     if SM.SetStoryTrackerShown then SM.SetStoryTrackerShown(false) end
+    if SM.SetQuestItemTargets then SM.SetQuestItemTargets(B, scroll, nil) end
     if not B then return end
     if stack and slot then stack.Set(slot, false) else B:Hide() end
 end
@@ -1075,8 +1024,6 @@ function Refresh()
     plate.text:SetPoint("BOTTOMLEFT", plate, "BOTTOMLEFT", 22, bottom)
     plate.text:SetPoint("BOTTOMRIGHT", plate, "BOTTOMRIGHT", -PLATE_TEXT_RIGHT, bottom)
     plate.text:SetText(data.title)
-    plate.close:ClearAllPoints()
-    plate.close:SetPoint("RIGHT", plate, "RIGHT", -14, PLATE_CLOSE_Y)
 
     -- One heading and quest per chapter shown.
     local explorer = SM.IsExplorerMode and SM.IsExplorerMode()
@@ -1120,6 +1067,18 @@ function Refresh()
     if stack and slot then stack.Set(slot, true, height + BOTTOM_PAD) else B:Show() end
     -- Journey mode hides the quest tracker while a story shows here.
     if SM.SetStoryTrackerShown then SM.SetStoryTrackerShown(true) end
+    -- Each shown quest in the log may have an item to use, beside it.
+    if SM.SetQuestItemTargets then
+        local targets = {}
+        for i = 1, #shown do
+            local entry = entries[i]
+            if entry.nextQuest and not entry.locked and entry.quest:IsShown() then
+                local inLog, questID = SM.IsQuestEntryInLog(entry.nextQuest)
+                if inLog then targets[#targets + 1] = { frame = entry.quest, questID = questID } end
+            end
+        end
+        SM.SetQuestItemTargets(B, scroll, targets)
+    end
 end
 
 function SM.RefreshNextStepTracker()
@@ -1161,16 +1120,16 @@ function SM.ToggleTrackedStory(data, tracked)
     if tracked == nil then tracked = not IsFollowed(data) end
     if SM.SetFollowedStoryID then SM.SetFollowedStoryID(tracked and data.id or nil) end
     if SM.Client.isForever then PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON) end
-    print(L["Addon Prefix"] .. string.format(tracked and L["Tracker Chapter Tracked Format"] or L["Tracker Chapter Untracked Format"], data.title))
     Refresh()
     if SM.RefreshStoryListState then SM.RefreshStoryListState() end
     if SM.RefreshTrackNodeBadges then SM.RefreshTrackNodeBadges() end
 end
 
 -- The hint a chapter's node on the Progress track shows, or nil when it
--- can't be tracked (finished, or not reached yet in Explorer mode).
+-- can't be tracked (finished, or not reached yet in Explorer mode) or the
+-- player turned help in tooltips off.
 function SM.GetChapterTrackHint(data, ch)
-    if not (data and ch) then return nil end
+    if not (data and ch) or not ShowsHelp() then return nil end
     if IsShown(data, ch) then return SM.FormatHotkeys(L["Tracker Node Untrack"]) end
     if not WithStory(data, SM.FindChapterNextQuest, data, ch, false) then return nil end
     if SM.IsExplorerMode and SM.IsExplorerMode() and not WithStory(data, SM.IsChapterReached, data, ch) then return nil end
@@ -1200,10 +1159,106 @@ function SM.ToggleTrackedChapter(data, ch, tracked)
         SM.SetChapterTrackState(data, ch, false)
     end
     if SM.Client.isForever then PlaySound(SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON) end
-    print(L["Addon Prefix"] .. string.format(tracked and L["Tracker Chapter Tracked Format"] or L["Tracker Chapter Untracked Format"], ch.chapter))
     Refresh()
     if SM.RefreshStoryListState then SM.RefreshStoryListState() end
     if SM.RefreshTrackNodeBadges then SM.RefreshTrackNodeBadges() end
+end
+
+-- ── Preview (the settings page) ──────────────────────────────────────────
+-- Every look a quest can have on the tracker, built from the same art and
+-- sizes: one row per state, its shield as it shows normally and while the
+-- quest is the one in focus, then a dungeon step's tag.
+local PREVIEW = { rowH = 36, labelW = 190, cellW = 90, gap = 6 }
+
+local function PreviewIcon(parent, glyph, focused, locked)
+    local cell = CreateFrame("Frame", nil, parent)
+    cell:SetSize(SHIELD_SIZE, SHIELD_SIZE)
+    local padlock = locked and HasAtlas(ATLAS.lock)
+    local shieldAtlas = (focused and HasAtlas(ATLAS.shieldFocus)) and ATLAS.shieldFocus or ATLAS.shield
+    if not padlock and HasAtlas(shieldAtlas) then
+        local shield = cell:CreateTexture(nil, "ARTWORK", nil, 1)
+        shield:SetSize(SHIELD_SIZE, SHIELD_SIZE)
+        shield:SetPoint("CENTER")
+        shield:SetAtlas(shieldAtlas)
+        shield:SetDesaturated(locked and true or false)
+    end
+    if glyph == ATLAS.inProgress and focused and HasAtlas(ATLAS.inProgressFocus) then glyph = ATLAS.inProgressFocus end
+    if HasAtlas(glyph) then
+        local tex = cell:CreateTexture(nil, "ARTWORK", nil, 2)
+        local size = (glyph == ATLAS.lock and LOCK_SIZE)
+            or ((glyph == ATLAS.inProgress or glyph == ATLAS.inProgressFocus) and IN_PROGRESS_SIZE)
+            or SHIELD_SIZE
+        tex:SetSize(size, size)
+        tex:SetPoint("CENTER", 0, glyph == ATLAS.bang and BANG_RAISE or 0)
+        tex:SetAtlas(glyph)
+        if locked and not padlock then
+            tex:SetDesaturated(true)
+            tex:SetAlpha(0.75)
+        end
+    end
+    return cell
+end
+
+-- Builds the preview in parent; returns its height.
+function SM.BuildTrackerPreview(parent)
+    local states = {
+        { label = "Preview To Pick Up", glyph = ATLAS.bang },
+        { label = "Preview In Progress", glyph = HasAtlas(ATLAS.inProgress) and ATLAS.inProgress or ATLAS.turnIn },
+        { label = "Preview Ready", glyph = ATLAS.turnIn },
+        { label = "Preview Locked", glyph = HasAtlas(ATLAS.lock) and ATLAS.lock or ATLAS.bang, locked = true },
+    }
+    local y = 0
+    -- Column headings.
+    for i, key in ipairs({ "Preview Normal", "Preview Tracked" }) do
+        local head = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        head:SetPoint("TOP", parent, "TOPLEFT", PREVIEW.labelW + (i - 0.5) * PREVIEW.cellW, -y)
+        head:SetText(L[key])
+    end
+    y = y + 18
+    for _, state in ipairs(states) do
+        local label = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        label:SetPoint("LEFT", parent, "TOPLEFT", 0, -(y + PREVIEW.rowH / 2))
+        label:SetWidth(PREVIEW.labelW - 8)
+        label:SetJustifyH("LEFT")
+        label:SetText(L[state.label])
+        for i, focused in ipairs({ false, true }) do
+            -- A locked chapter can't be the one in focus.
+            if not (state.locked and focused) then
+                local cell = PreviewIcon(parent, state.glyph, focused, state.locked)
+                cell:SetPoint("CENTER", parent, "TOPLEFT", PREVIEW.labelW + (i - 0.5) * PREVIEW.cellW, -(y + PREVIEW.rowH / 2))
+            end
+        end
+        y = y + PREVIEW.rowH
+    end
+    -- A dungeon step: its title, the tag under it.
+    y = y + PREVIEW.gap
+    local cell = PreviewIcon(parent, ATLAS.bang, false)
+    cell:SetPoint("TOPLEFT", parent, "TOPLEFT", 2, -y)
+    local title = parent:CreateFontString(nil, "OVERLAY")
+    title:SetFontObject(LINE_FONT)
+    title:SetPoint("TOPLEFT", parent, "TOPLEFT", TITLE_X, -(y + 3))
+    title:SetText(L["Preview Dungeon Step"])
+    SetColor(title, COLOR.title)
+    local tag = INSTANCE_TAG.dungeon
+    local tagText = _G[tag.label] or tag.fallback
+    if HasAtlas(tag.icon) then
+        tagText = string.format("|A:%s:%d:%d|a %s", tag.icon, INSTANCE_ICON_SIZE, INSTANCE_ICON_SIZE, tagText)
+    end
+    local tagLine = parent:CreateFontString(nil, "OVERLAY")
+    tagLine:SetFontObject(STEP_FONT)
+    tagLine:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -TAG_GAP)
+    tagLine:SetText(tagText)
+    SetColor(tagLine, TAG_COLOR)
+    y = y + SHIELD_SIZE + 12
+    return y
+end
+
+-- Shows or hides the tracker (the settings page; /sm tracker toggles it).
+function SM.SetNextStepTrackerShown(on)
+    local db = SM.DB()
+    if not db then return end
+    db.nextStepTrackerHidden = not on or nil
+    Refresh()
 end
 
 local events = CreateFrame("Frame")

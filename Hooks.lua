@@ -197,6 +197,7 @@ local function DecorateRow(row)
         card.smtEnterHooked = true
         card:HookScript("OnEnter", function(self)
             if not self.smtData then return end
+            if T.ShowsTooltipHelp and not T.ShowsTooltipHelp() then return end
             local tip = Tooltip()
             local tracked = T.IsStoryTracked and T.IsStoryTracked(self.smtData)
             local hint = T.FormatHotkeys(tracked and L["Story Card Untrack"] or L["Story Card Track"])

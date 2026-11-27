@@ -2,7 +2,7 @@ local addonName, T = ...
 
 -- =============================================================================
 -- Story Mode - Tracker: Journey Mode
--- A checkbox in the Story Mode window's header. While it's on and the
+-- A checkbox in the Story Mode window's header (WindowOptions.lua). While it's on and the
 -- next-step tracker shows a story, the standard quest tracker is hidden, so
 -- only the story's steps are on screen. Off, or with no story shown, the
 -- quest tracker comes back.
@@ -30,6 +30,12 @@ local storyShown = false   -- the next-step tracker shows a story right now
 local hiddenByUs = {}      -- [frame] = true: frames this hid, to show again
 local hooked = {}
 local pending = false      -- a change waits for combat to end
+local restoreAt            -- when the story went away: the tracker comes back a moment later
+
+-- How long the story may be gone before the quest tracker comes back. The
+-- next-step tracker can drop its story for a refresh or two (a quest just
+-- accepted or turned in), and the quest tracker shouldn't flash in between.
+local RESTORE_DELAY = 0.5
 
 local function QuestTrackers()
     local list = {}
@@ -42,99 +48,99 @@ local function Wanted()
     return T.IsJourneyMode() and storyShown
 end
 
-local Apply
-
--- The game (or FlareUI) shows its tracker again whenever it updates; while
--- Journey mode wants it gone, it's hidden again right after.
-local function HookShow(frame)
-    if hooked[frame] then return end
-    hooked[frame] = true
-    frame:HookScript("OnShow", function()
-        if Wanted() then C_Timer.After(0, Apply) end
-    end)
+local function CanChange(frame)
+    return not (InCombatLockdown() and frame.IsProtected and frame:IsProtected())
 end
 
-function Apply()
-    if InCombatLockdown() then
+local function HideTracker(frame)
+    if not frame:IsShown() then return end
+    if not CanChange(frame) then
         pending = true
         return
     end
+    frame:Hide()
+    hiddenByUs[frame] = true
+    -- FlareUI's item buttons sit apart from its tracker; they go with it.
+    if T.RelayoutQuestItems then T.RelayoutQuestItems() end
+end
+
+-- Back to its owner: Blizzard's tracker through its own Update, which shows
+-- it only when it has something to show; FlareUI's just shown (its next
+-- update hides it again when there's nothing to track).
+local function RestoreTracker(frame)
+    if not hiddenByUs[frame] then return end
+    if not CanChange(frame) then
+        pending = true
+        return
+    end
+    hiddenByUs[frame] = nil
+    if frame == _G.ObjectiveTrackerFrame and frame.Update then
+        frame:Update()
+    else
+        frame:Show()
+    end
+end
+
+-- The game (or FlareUI) shows its tracker again whenever it updates, as when
+-- a quest is accepted; while Journey Mode wants it gone, it's hidden again
+-- at once.
+local function HookShow(frame)
+    if hooked[frame] then return end
+    hooked[frame] = true
+    frame:HookScript("OnShow", function(self)
+        if Wanted() then HideTracker(self) end
+    end)
+end
+
+local function Apply()
     pending = false
     local hide = Wanted()
     for _, frame in ipairs(QuestTrackers()) do
         HookShow(frame)
-        if hide then
-            if frame:IsShown() then
-                frame:Hide()
-                hiddenByUs[frame] = true
-            end
-        elseif hiddenByUs[frame] then
-            hiddenByUs[frame] = nil
-            frame:Show()
-        end
+        if hide then HideTracker(frame) else RestoreTracker(frame) end
     end
 end
 
 -- The next-step tracker says whether it shows a story after each refresh.
 function T.SetStoryTrackerShown(shown)
     shown = shown and true or false
-    if shown == storyShown then return end
-    storyShown = shown
-    Apply()
+    if shown then
+        restoreAt = nil
+        storyShown = true
+        Apply()
+    elseif storyShown and not restoreAt then
+        local token = GetTime()
+        restoreAt = token
+        C_Timer.After(RESTORE_DELAY, function()
+            if restoreAt ~= token then return end
+            restoreAt = nil
+            storyShown = false
+            Apply()
+        end)
+    end
 end
 
+-- Besides the tracker's own refreshes: after combat (a change that had to
+-- wait), and whenever the quest log changes, since another addon's tracker
+-- may only appear then (FlareUI builds its own after login).
 local events = CreateFrame("Frame")
-events:RegisterEvent("PLAYER_REGEN_ENABLED")
-events:SetScript("OnEvent", function()
-    if pending then Apply() end
+for _, event in ipairs({ "PLAYER_REGEN_ENABLED", "PLAYER_ENTERING_WORLD", "QUEST_ACCEPTED", "QUEST_WATCH_LIST_CHANGED", "QUEST_LOG_UPDATE" }) do
+    pcall(events.RegisterEvent, events, event)
+end
+events:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_REGEN_ENABLED" then
+        if pending then Apply() end
+    elseif Wanted() then
+        Apply()
+    end
 end)
+T.ApplyJourneyMode = Apply
 
--- ── The checkbox ─────────────────────────────────────────────────────────
--- In the window's header, right of the points bar and under the close
--- button; it says what it does in its tooltip.
-local CHECK = { size = 24, right = -14, top = -32 }
-
-local function SetJourneyMode(on)
+-- Turned on or off from its checkbox in the Story Mode window
+-- (WindowOptions.lua).
+function T.SetJourneyMode(on)
     local db = T.DB()
     if not db then return end
     db.journeyMode = on and true or nil
-    PlaySound(on and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_OFF)
     Apply()
-end
-
-local function CreateCheckbox()
-    local frame = _G.StoryModeFrame
-    if not frame or T.JourneyModeCheck then return end
-    local check = CreateFrame("CheckButton", nil, frame, "UICheckButtonTemplate")
-    check:SetSize(CHECK.size, CHECK.size)
-    check:SetPoint("TOPRIGHT", frame, "TOPRIGHT", CHECK.right, CHECK.top)
-    check:SetFrameLevel(frame:GetFrameLevel() + 20)
-    local label = check.Text or check.text
-    if not label then
-        label = check:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    end
-    label:SetFontObject("GameFontNormalSmall")
-    label:ClearAllPoints()
-    label:SetPoint("RIGHT", check, "LEFT", -1, 1)
-    label:SetText(L["Journey Mode"])
-    -- The label is part of the button: clicking it toggles too.
-    check:SetHitRectInsets(-(label:GetStringWidth() + 4), 0, 0, 0)
-    check:SetScript("OnShow", function(self) self:SetChecked(T.IsJourneyMode()) end)
-    check:SetScript("OnClick", function(self) SetJourneyMode(self:GetChecked()) end)
-    check:SetScript("OnEnter", function(self)
-        local tip = SM.Tooltip or GameTooltip
-        tip:SetOwner(self, "ANCHOR_BOTTOMLEFT")
-        tip:ClearLines()
-        tip:AddLine(L["Journey Mode"], 1, 1, 1)
-        tip:AddLine(L["Journey Mode Text"], 1, 0.82, 0, true)
-        tip:Show()
-    end)
-    check:SetScript("OnLeave", function() (SM.Tooltip or GameTooltip):Hide() end)
-    check:SetChecked(T.IsJourneyMode())
-    T.JourneyModeCheck = check
-end
-
-CreateCheckbox()
-for _, name in ipairs({ "BuildStoryWindow", "RebuildStoryWindow" }) do
-    if SM[name] then hooksecurefunc(SM, name, CreateCheckbox) end
 end

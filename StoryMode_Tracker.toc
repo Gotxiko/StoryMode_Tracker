@@ -15,4 +15,7 @@ Core.lua
 Hooks.lua
 TrackerStack.lua
 NextStepTracker.lua
+QuestItems.lua
 JourneyMode.lua
+WindowOptions.lua
+SettingsPage.lua
